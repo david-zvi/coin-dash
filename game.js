@@ -54,7 +54,10 @@ class CoinDash extends Phaser.Scene {
       const toTarget = new Phaser.Math.Vector2(target.x - drone.x, target.y - drone.y);
       // Stop when on target so guards hover instead of jittering.
       if (toTarget.length() < 4) drone.body.setVelocity(0, 0);
-      else drone.body.setVelocity(...toTarget.normalize().scale(m.chaseSpeed).toArray());
+      else {
+        const v = toTarget.normalize().scale(m.chaseSpeed);
+        drone.body.setVelocity(v.x, v.y);
+      }
     });
   }
 
