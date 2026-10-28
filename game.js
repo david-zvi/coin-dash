@@ -43,10 +43,24 @@ class CoinDash extends Phaser.Scene {
     this.physics.add.overlap(this.player, this.coin, () => {
       if (this.finished) return;
       this.score++;
+      const burst = this.add.particles(this.coin.x, this.coin.y, 'spark', {
+        speed: { min: 60, max: 170 }, lifespan: 350, scale: { start: 1, end: 0 },
+        tint: c.colors.coin, emitting: false
+      });
+      burst.explode(10);
+      this.time.delayedCall(400, () => burst.destroy());
+      this.tweens.add({ targets: this.player, scale: 1.4, duration: 70, yoyo: true });
+      window.Sfx && Sfx.coin();
       this.placeCoin();
     });
     this.physics.add.overlap(this.player, this.drones, () => this.finish('A drone caught you!'));
     this.fx = this.add.graphics(); // sword and aim line, redrawn every frame; the scene frees it on restart
+    if (!this.textures.exists('spark')) {
+      this.add.graphics().fillStyle(0xffffff).fillCircle(4, 4, 4).generateTexture('spark', 8, 8).destroy();
+    }
+    this.lastGhost = 0;
+    this.lastTick = -1;
+    this.input.keyboard.on('keydown-N', () => window.Sfx && Sfx.toggleMute()); // M is Mayhem
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D,R');
     this.input.keyboard.on('keydown-R', () => this.scene.restart());
@@ -191,9 +205,18 @@ class CoinDash extends Phaser.Scene {
       - Number(this.cursors.up.isDown || this.keys.W.isDown);
     const direction = new Phaser.Math.Vector2(dx, dy).normalize().scale(COIN_DASH.playerSpeed);
     this.player.body.setVelocity(direction.x, direction.y);
+    if ((dx || dy) && this.time.now - this.lastGhost > 50) {
+      this.lastGhost = this.time.now;
+      const ghost = this.add.rectangle(this.player.x, this.player.y, 24, 24, COIN_DASH.colors.player, 0.35);
+      this.tweens.add({ targets: ghost, alpha: 0, duration: 300, onComplete: () => ghost.destroy() });
+    }
     if (this.mode.chaseSpeed) this.chaseDrones();
     if (this.mayhemOn) this.mayhem(delta);
     const seconds = Math.max(0, Math.ceil((this.deadline - this.time.now) / 1000));
+    if (seconds >= 1 && seconds <= 3 && seconds !== this.lastTick) {
+      this.lastTick = seconds;
+      window.Sfx && Sfx.tick();
+    }
     this.hud.setText(`Coins: ${this.score}   Best: ${Math.max(this.best, this.score)}   Time: ${seconds}s   Mode: ${this.mode.name} (1/2/3)   Mayhem: ${this.mayhemOn ? 'ON' : 'OFF'} (M)`);
     if (seconds === 0) this.finish('Time is up!');
   }
@@ -204,6 +227,13 @@ class CoinDash extends Phaser.Scene {
     this.physics.pause();
     const c = COIN_DASH;
     const beaten = this.score > this.best;
+    const timeUp = reason === 'Time is up!';
+    if (!timeUp) {
+      this.cameras.main.shake(250, 0.01);
+      this.cameras.main.flash(250, 255, 0, 0);
+      window.Sfx && Sfx.hit();
+    }
+    if (window.Sfx) beaten ? Sfx.best() : timeUp && Sfx.over();
     if (beaten) try { localStorage.setItem('coinDashBest', this.score); } catch (e) { /* storage unavailable */ }
     this.add.rectangle(c.width / 2, c.height / 2, 460, beaten ? 190 : 150, 0x0a1120, 0.95);
     this.add.text(c.width / 2, c.height / 2,
