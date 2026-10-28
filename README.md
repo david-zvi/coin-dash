@@ -3,7 +3,8 @@
 Collect coins, avoid drones, and survive a 45-second round. Move with arrow keys or WASD;
 press R to restart. Press 1/2/3 to pick Easy (bouncing drones), Hard (drones chase you) or
 Expert (drones predict your movement and some guard the coin); the mode is kept across restarts
-and tuned in `settings.js`. This is deliberately small so you can add features during the lab.
+and tuned in `settings.js`. Press M to toggle Mayhem: each drone gets a power (sprint, spinning
+sword, aimed dash) that rotates between drones every 12 seconds. This is deliberately small so you can add features during the lab.
 
 **Play it here:** https://www.avivz.net/coin-dash/
 

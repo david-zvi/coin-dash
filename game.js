@@ -10,6 +10,12 @@ class CoinDash extends Phaser.Scene {
     try { this.best = Number(localStorage.getItem('coinDashBest')) || 0; } catch (e) { this.best = 0; }
     // The registry survives scene.restart(), so the mode sticks across rounds.
     this.mode = c.modes[this.registry.get('mode') || 0];
+    this.mayhemOn = !!this.registry.get('mayhem');
+    // Mayhem clock: only advances while playing (not paused, not in grace), so power timers never skip.
+    this.mt = 0;
+    this.rot = 0;
+    this.nextSwap = c.mayhem.swapSeconds;
+    this.dash = { phase: 'wait', t: 0 };
     this.deadline = this.time.now + c.roundSeconds * 1000;
     this.physics.world.setBounds(0, 44, c.width, c.height - 44);
     this.add.grid(c.width / 2, c.height / 2, c.width, c.height, 40, 40,
@@ -40,11 +46,16 @@ class CoinDash extends Phaser.Scene {
       this.placeCoin();
     });
     this.physics.add.overlap(this.player, this.drones, () => this.finish('A drone caught you!'));
+    this.fx = this.add.graphics(); // sword and aim line, redrawn every frame; the scene frees it on restart
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D,R');
     this.input.keyboard.on('keydown-R', () => this.scene.restart());
     this.input.keyboard.on('keydown-P', () => this.togglePause());
     this.input.keyboard.on('keydown-ESC', () => this.togglePause());
+    this.input.keyboard.on('keydown-M', () => {
+      this.registry.set('mayhem', !this.mayhemOn);
+      this.scene.restart();
+    });
     ['ONE', 'TWO', 'THREE'].forEach((key, i) => this.input.keyboard.on(`keydown-${key}`, () => {
       this.registry.set('mode', i);
       this.scene.restart();
@@ -101,6 +112,65 @@ class CoinDash extends Phaser.Scene {
     });
   }
 
+  // Powers add to the difficulty's own movement, so this runs after chaseDrones().
+  mayhem(delta) {
+    const m = COIN_DASH.mayhem;
+    this.fx.clear();
+    if (this.time.now < this.graceEnd) return;
+    this.mt += delta / 1000;
+    if (this.mt >= this.nextSwap) {
+      this.nextSwap += m.swapSeconds;
+      this.rot++;
+      this.dash = { phase: 'wait', t: this.mt };
+    }
+    const blink = Math.floor(this.mt * 8) % 2 ? 0.25 : 1;
+    const warn = this.nextSwap - this.mt < m.swapWarn;
+    const u = this.mt % m.sprintEvery;
+    const sprinting = u >= m.sprintEvery - m.sprintRun;
+    const flashing = !sprinting && u >= m.sprintEvery - m.sprintRun - m.sprintFlash;
+    this.drones.getChildren().forEach((d, i) => {
+      const power = m.powers[(i + this.rot) % m.powers.length];
+      d.setFillStyle(m.colors[power]).setAlpha(warn ? blink : 1);
+      if (!this.mode.chaseSpeed) { // bouncing: keep a steady speed
+        d.body.velocity.normalize().scale(COIN_DASH.droneSpeed * (power === 'sprinter' && sprinting ? m.sprintBoost : 1));
+      } else if (power === 'sprinter' && sprinting) {
+        d.body.velocity.scale(m.sprintBoost);
+      }
+      if (power === 'sprinter' && flashing) d.setAlpha(blink);
+      if (power === 'spinner') {
+        const a = this.mt * m.swordTurn;
+        const sword = new Phaser.Geom.Line(d.x, d.y, d.x + Math.cos(a) * m.swordReach, d.y + Math.sin(a) * m.swordReach);
+        this.fx.lineStyle(4, m.colors.spinner).strokeLineShape(sword);
+        if (Phaser.Geom.Intersects.LineToRectangle(sword, this.player.getBounds())) this.finish('A drone caught you!');
+      }
+      if (power === 'dasher') this.dasherTick(d);
+    });
+  }
+
+  dasherTick(d) {
+    const m = COIN_DASH.mayhem;
+    const k = this.dash;
+    if (k.phase === 'wait' && this.mt - k.t >= m.dashEvery) {
+      // Lock on: the direction is fixed now, so the player can dodge during the aim.
+      const dir = new Phaser.Math.Vector2(this.player.x - d.x, this.player.y - d.y);
+      k.dir = dir.length() < 1 ? dir.set(1, 0) : dir.normalize();
+      k.phase = 'aim';
+      k.t = this.mt;
+    }
+    if (k.phase === 'aim') {
+      this.fx.lineStyle(1, COIN_DASH.mayhem.colors.dasher).lineBetween(d.x, d.y, d.x + k.dir.x * 1000, d.y + k.dir.y * 1000);
+      if (this.mt - k.t >= m.dashAim) { k.phase = 'go'; k.t = this.mt; }
+    } else if (k.phase === 'go') {
+      const b = d.body.blocked;
+      if (this.mt - k.t > m.dashMax || (this.mt - k.t > 0.1 && !b.none)) {
+        k.phase = 'wait';
+        k.t = this.mt;
+      } else {
+        d.body.setVelocity(k.dir.x * m.dashSpeed, k.dir.y * m.dashSpeed);
+      }
+    }
+  }
+
   placeCoin() {
     const c = COIN_DASH;
     // Avoid spawning the next coin directly underneath the player.
@@ -113,7 +183,7 @@ class CoinDash extends Phaser.Scene {
     this.coin.body.reset(x, y);
   }
 
-  update() {
+  update(time, delta) {
     if (this.finished || this.paused) return;
     const dx = Number(this.cursors.right.isDown || this.keys.D.isDown)
       - Number(this.cursors.left.isDown || this.keys.A.isDown);
@@ -122,8 +192,9 @@ class CoinDash extends Phaser.Scene {
     const direction = new Phaser.Math.Vector2(dx, dy).normalize().scale(COIN_DASH.playerSpeed);
     this.player.body.setVelocity(direction.x, direction.y);
     if (this.mode.chaseSpeed) this.chaseDrones();
+    if (this.mayhemOn) this.mayhem(delta);
     const seconds = Math.max(0, Math.ceil((this.deadline - this.time.now) / 1000));
-    this.hud.setText(`Coins: ${this.score}   Best: ${Math.max(this.best, this.score)}   Time: ${seconds}s   Mode: ${this.mode.name} (1/2/3)`);
+    this.hud.setText(`Coins: ${this.score}   Best: ${Math.max(this.best, this.score)}   Time: ${seconds}s   Mode: ${this.mode.name} (1/2/3)   Mayhem: ${this.mayhemOn ? 'ON' : 'OFF'} (M)`);
     if (seconds === 0) this.finish('Time is up!');
   }
 
