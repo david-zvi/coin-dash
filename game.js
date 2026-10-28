@@ -31,6 +31,9 @@ class CoinDash extends Phaser.Scene {
       drone.body.setVelocity(Math.cos(angle) * c.droneSpeed, Math.sin(angle) * c.droneSpeed);
       drone.isGuard = i % 2 === 1;
     }
+    this.graceEnd = this.time.now + (this.mode.droneGraceSeconds || 0) * 1000;
+    // Bouncing drones push off each other; chasing drones are spaced in chaseDrones().
+    if (!this.mode.chaseSpeed) this.physics.add.collider(this.drones, this.drones);
     this.physics.add.overlap(this.player, this.coin, () => {
       if (this.finished) return;
       this.score++;
@@ -61,6 +64,7 @@ class CoinDash extends Phaser.Scene {
     } else {
       this.physics.resume();
       this.deadline += this.time.now - this.pausedAt;
+      this.graceEnd += this.time.now - this.pausedAt;
       this.pauseText.destroy();
     }
   }
@@ -68,17 +72,32 @@ class CoinDash extends Phaser.Scene {
   chaseDrones() {
     const m = this.mode;
     const p = this.player;
+    // Telegraph: drones sit still and blink until the grace period ends.
+    const grace = this.time.now < this.graceEnd;
+    const drones = this.drones.getChildren();
+    drones.forEach(d => d.setAlpha(grace && Math.floor(this.time.now / 120) % 2 ? 0.25 : 1));
+    if (grace) {
+      drones.forEach(d => d.body.setVelocity(0, 0));
+      return;
+    }
     const lead = new Phaser.Math.Vector2(p.x, p.y).add(p.body.velocity.clone().scale(m.leadTime));
-    this.drones.getChildren().forEach(drone => {
+    drones.forEach(drone => {
       const target = drone.isGuard
         ? lead.clone().lerp(new Phaser.Math.Vector2(this.coin.x, this.coin.y), m.coinBias) : lead;
       const toTarget = new Phaser.Math.Vector2(target.x - drone.x, target.y - drone.y);
       // Stop when on target so guards hover instead of jittering.
-      if (toTarget.length() < 4) drone.body.setVelocity(0, 0);
-      else {
-        const v = toTarget.normalize().scale(m.chaseSpeed);
-        drone.body.setVelocity(v.x, v.y);
-      }
+      const v = toTarget.length() < 4 ? toTarget.set(0, 0) : toTarget.normalize().scale(m.chaseSpeed);
+      // Push away from drones inside the gap (strong, so they never stack), then cap to chase speed.
+      drones.forEach(other => {
+        if (other === drone) return;
+        const away = new Phaser.Math.Vector2(drone.x - other.x, drone.y - other.y);
+        const d = away.length();
+        if (d >= COIN_DASH.minDroneGap) return;
+        const push = away.length() < 1 ? away.set(1, 0) : away.normalize();
+        v.add(push.scale(8 * m.chaseSpeed * (1 - d / COIN_DASH.minDroneGap)));
+      });
+      if (v.length() > m.chaseSpeed) v.normalize().scale(m.chaseSpeed);
+      drone.body.setVelocity(v.x, v.y);
     });
   }
 
