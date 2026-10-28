@@ -8,6 +8,8 @@ class CoinDash extends Phaser.Scene {
     this.finished = false;
     this.paused = false;
     try { this.best = Number(localStorage.getItem('coinDashBest')) || 0; } catch (e) { this.best = 0; }
+    // The registry survives scene.restart(), so the mode sticks across rounds.
+    this.mode = c.modes[this.registry.get('mode') || 0];
     this.deadline = this.time.now + c.roundSeconds * 1000;
     this.physics.world.setBounds(0, 44, c.width, c.height - 44);
     this.add.grid(c.width / 2, c.height / 2, c.width, c.height, 40, 40,
@@ -27,6 +29,7 @@ class CoinDash extends Phaser.Scene {
       drone.body.setCollideWorldBounds(true).setBounce(1, 1);
       const angle = (35 + i * 105) * Math.PI / 180;
       drone.body.setVelocity(Math.cos(angle) * c.droneSpeed, Math.sin(angle) * c.droneSpeed);
+      drone.isGuard = i % 2 === 1;
     }
     this.physics.add.overlap(this.player, this.coin, () => {
       if (this.finished) return;
@@ -39,6 +42,10 @@ class CoinDash extends Phaser.Scene {
     this.input.keyboard.on('keydown-R', () => this.scene.restart());
     this.input.keyboard.on('keydown-P', () => this.togglePause());
     this.input.keyboard.on('keydown-ESC', () => this.togglePause());
+    ['ONE', 'TWO', 'THREE'].forEach((key, i) => this.input.keyboard.on(`keydown-${key}`, () => {
+      this.registry.set('mode', i);
+      this.scene.restart();
+    }));
   }
 
   togglePause() {
@@ -56,6 +63,23 @@ class CoinDash extends Phaser.Scene {
       this.deadline += this.time.now - this.pausedAt;
       this.pauseText.destroy();
     }
+  }
+
+  chaseDrones() {
+    const m = this.mode;
+    const p = this.player;
+    const lead = new Phaser.Math.Vector2(p.x, p.y).add(p.body.velocity.clone().scale(m.leadTime));
+    this.drones.getChildren().forEach(drone => {
+      const target = drone.isGuard
+        ? lead.clone().lerp(new Phaser.Math.Vector2(this.coin.x, this.coin.y), m.coinBias) : lead;
+      const toTarget = new Phaser.Math.Vector2(target.x - drone.x, target.y - drone.y);
+      // Stop when on target so guards hover instead of jittering.
+      if (toTarget.length() < 4) drone.body.setVelocity(0, 0);
+      else {
+        const v = toTarget.normalize().scale(m.chaseSpeed);
+        drone.body.setVelocity(v.x, v.y);
+      }
+    });
   }
 
   placeCoin() {
@@ -78,8 +102,9 @@ class CoinDash extends Phaser.Scene {
       - Number(this.cursors.up.isDown || this.keys.W.isDown);
     const direction = new Phaser.Math.Vector2(dx, dy).normalize().scale(COIN_DASH.playerSpeed);
     this.player.body.setVelocity(direction.x, direction.y);
+    if (this.mode.chaseSpeed) this.chaseDrones();
     const seconds = Math.max(0, Math.ceil((this.deadline - this.time.now) / 1000));
-    this.hud.setText(`Coins: ${this.score}   Best: ${Math.max(this.best, this.score)}         Time: ${seconds}s`);
+    this.hud.setText(`Coins: ${this.score}   Best: ${Math.max(this.best, this.score)}   Time: ${seconds}s   Mode: ${this.mode.name} (1/2/3)`);
     if (seconds === 0) this.finish('Time is up!');
   }
 
