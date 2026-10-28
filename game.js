@@ -6,6 +6,8 @@ class CoinDash extends Phaser.Scene {
     const c = COIN_DASH;
     this.score = 0;
     this.finished = false;
+    // The registry survives scene.restart(), so the mode sticks across rounds.
+    this.mode = c.modes[this.registry.get('mode') || 0];
     this.deadline = this.time.now + c.roundSeconds * 1000;
     this.physics.world.setBounds(0, 44, c.width, c.height - 44);
     this.add.grid(c.width / 2, c.height / 2, c.width, c.height, 40, 40,
@@ -25,6 +27,7 @@ class CoinDash extends Phaser.Scene {
       drone.body.setCollideWorldBounds(true).setBounce(1, 1);
       const angle = (35 + i * 105) * Math.PI / 180;
       drone.body.setVelocity(Math.cos(angle) * c.droneSpeed, Math.sin(angle) * c.droneSpeed);
+      drone.isGuard = i % 2 === 1;
     }
     this.physics.add.overlap(this.player, this.coin, () => {
       if (this.finished) return;
@@ -35,6 +38,24 @@ class CoinDash extends Phaser.Scene {
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D,R');
     this.input.keyboard.on('keydown-R', () => this.scene.restart());
+    ['ONE', 'TWO', 'THREE'].forEach((key, i) => this.input.keyboard.on(`keydown-${key}`, () => {
+      this.registry.set('mode', i);
+      this.scene.restart();
+    }));
+  }
+
+  chaseDrones() {
+    const m = this.mode;
+    const p = this.player;
+    const lead = new Phaser.Math.Vector2(p.x, p.y).add(p.body.velocity.clone().scale(m.leadTime));
+    this.drones.getChildren().forEach(drone => {
+      const target = drone.isGuard
+        ? lead.clone().lerp(new Phaser.Math.Vector2(this.coin.x, this.coin.y), m.coinBias) : lead;
+      const toTarget = new Phaser.Math.Vector2(target.x - drone.x, target.y - drone.y);
+      // Stop when on target so guards hover instead of jittering.
+      if (toTarget.length() < 4) drone.body.setVelocity(0, 0);
+      else drone.body.setVelocity(...toTarget.normalize().scale(m.chaseSpeed).toArray());
+    });
   }
 
   placeCoin() {
@@ -57,8 +78,9 @@ class CoinDash extends Phaser.Scene {
       - Number(this.cursors.up.isDown || this.keys.W.isDown);
     const direction = new Phaser.Math.Vector2(dx, dy).normalize().scale(COIN_DASH.playerSpeed);
     this.player.body.setVelocity(direction.x, direction.y);
+    if (this.mode.chaseSpeed) this.chaseDrones();
     const seconds = Math.max(0, Math.ceil((this.deadline - this.time.now) / 1000));
-    this.hud.setText(`Coins: ${this.score}                       Time: ${seconds}s`);
+    this.hud.setText(`Coins: ${this.score}   Time: ${seconds}s   Mode: ${this.mode.name} (1/2/3)`);
     if (seconds === 0) this.finish('Time is up!');
   }
 
